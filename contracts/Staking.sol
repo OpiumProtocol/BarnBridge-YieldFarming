@@ -51,19 +51,34 @@ contract Staking is ReentrancyGuard {
         epochDuration = _epochDuration;
     }
 
+    function deposit(address tokenAddress, uint256 amount) public {
+        _deposit(tokenAddress, amount, msg.sender);
+    }
+
+    function depositForSomeone(address tokenAddress, uint256 amount, address user) public {
+        _deposit(tokenAddress, amount, user);
+    }
+
     /*
      * Stores `amount` of `tokenAddress` tokens for the `user` into the vault
      */
-    function deposit(address tokenAddress, uint256 amount) public nonReentrant {
+    struct DepositLocalVars {
+        IERC20 token;
+        uint256 allowance;
+    }
+    function _deposit(address tokenAddress, uint256 amount, address user) private nonReentrant {
         require(amount > 0, "Staking: Amount must be > 0");
 
-        IERC20 token = IERC20(tokenAddress);
-        uint256 allowance = token.allowance(msg.sender, address(this));
-        require(allowance >= amount, "Staking: Token allowance too small");
+        // Local variables
+        DepositLocalVars memory vars;
 
-        balances[msg.sender][tokenAddress] = balances[msg.sender][tokenAddress].add(amount);
+        vars.token = IERC20(tokenAddress);
+        vars.allowance = vars.token.allowance(msg.sender, address(this));
+        require(vars.allowance >= amount, "Staking: Token allowance too small");
 
-        token.transferFrom(msg.sender, address(this), amount);
+        balances[user][tokenAddress] = balances[user][tokenAddress].add(amount);
+
+        vars.token.transferFrom(msg.sender, address(this), amount);
 
         // epoch logic
         uint128 currentEpoch = getCurrentEpoch();
@@ -77,12 +92,12 @@ contract Staking is ReentrancyGuard {
 
         // update the next epoch pool size
         Pool storage pNextEpoch = poolSize[tokenAddress][currentEpoch + 1];
-        pNextEpoch.size = token.balanceOf(address(this));
+        pNextEpoch.size = vars.token.balanceOf(address(this));
         pNextEpoch.set = true;
 
-        Checkpoint[] storage checkpoints = balanceCheckpoints[msg.sender][tokenAddress];
+        Checkpoint[] storage checkpoints = balanceCheckpoints[user][tokenAddress];
 
-        uint256 balanceBefore = getEpochUserBalance(msg.sender, tokenAddress, currentEpoch);
+        uint256 balanceBefore = getEpochUserBalance(user, tokenAddress, currentEpoch);
 
         // if there's no checkpoint yet, it means the user didn't have any activity
         // we want to store checkpoints both for the current epoch and next epoch because
@@ -105,7 +120,7 @@ contract Staking is ReentrancyGuard {
                     currentMultiplier
                 );
                 checkpoints.push(Checkpoint(currentEpoch, multiplier, getCheckpointBalance(checkpoints[last]), amount));
-                checkpoints.push(Checkpoint(currentEpoch + 1, BASE_MULTIPLIER, balances[msg.sender][tokenAddress], 0));
+                checkpoints.push(Checkpoint(currentEpoch + 1, BASE_MULTIPLIER, balances[user][tokenAddress], 0));
             }
             // the last action happened in the previous epoch
             else if (checkpoints[last].epochId == currentEpoch) {
@@ -117,7 +132,7 @@ contract Staking is ReentrancyGuard {
                 );
                 checkpoints[last].newDeposits = checkpoints[last].newDeposits.add(amount);
 
-                checkpoints.push(Checkpoint(currentEpoch + 1, BASE_MULTIPLIER, balances[msg.sender][tokenAddress], 0));
+                checkpoints.push(Checkpoint(currentEpoch + 1, BASE_MULTIPLIER, balances[user][tokenAddress], 0));
             }
             // the last action happened in the current epoch
             else {
@@ -131,15 +146,15 @@ contract Staking is ReentrancyGuard {
                     checkpoints[last - 1].newDeposits = checkpoints[last - 1].newDeposits.add(amount);
                 }
 
-                checkpoints[last].startBalance = balances[msg.sender][tokenAddress];
+                checkpoints[last].startBalance = balances[user][tokenAddress];
             }
         }
 
-        uint256 balanceAfter = getEpochUserBalance(msg.sender, tokenAddress, currentEpoch);
+        uint256 balanceAfter = getEpochUserBalance(user, tokenAddress, currentEpoch);
 
         poolSize[tokenAddress][currentEpoch].size = poolSize[tokenAddress][currentEpoch].size.add(balanceAfter.sub(balanceBefore));
 
-        emit Deposit(msg.sender, tokenAddress, amount);
+        emit Deposit(user, tokenAddress, amount);
     }
 
     /*
